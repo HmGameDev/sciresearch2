@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Navigation for Visually Impaired</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <!-- Mapbox GL CSS -->
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css' rel='stylesheet' />
+    <!-- Mapbox Geocoder CSS -->
+    <link href='https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.css' rel='stylesheet' />
+    <style>
+        /* Basic styles for body */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f0f0f0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* Container for the map */
+        #map {
+            height: 60vh;
+            width: 90%;
+            margin: 20px 0;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        /* Controls container */
+        #controls {
+            width: 90%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        /* Form input styles */
+        input, select, button {
+            width: 80%;
+            max-width: 300px;
+            padding: 10px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            font-size: 1em;
+        }
+
+        /* Button styles */
+        button {
+            background-color: #3498db;
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+        }
+
+        /* Error message styling */
+        .error {
+            color: red;
+            font-size: 14px;
+            margin-top: 10px;
+        }
+
+        /* Navigation buttons container */
+        .nav-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body onload="initializeMap()">
+    <!-- Map container -->
+    <div id="map"></div>
+
+    <!-- Controls for input and button -->
+    <div id="controls">
+        <div id="currentLocationInputContainer"></div>
+        <div id="destinationInputContainer"></div>
+        <select id="mode">
+            <option value="driving">Driving</option>
+            <option value="walking">Walking</option>
+        </select>
+        <button onclick="startNavigation()">Start Navigation</button>
+        <div id="error-message" class="error"></div>
+    </div>
+
+    <!-- Navigation buttons to switch screens -->
+    <div class="nav-buttons">
+        <button onclick="goToIndex()">Go to Index</button>
+        <button onclick="goToNavigation()">Navigation Screen</button>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <!-- Mapbox GL JS -->
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js'></script>
+    <!-- Mapbox Geocoder JS -->
+    <script src='https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.min.js'></script>
+
+    <script>
+        // Mapbox Access Token
+        mapboxgl.accessToken = 'pk.eyJ1IjoiZXN0dXBpZGxvcmQiLCJhIjoiY2x6YTZsZzRvMGF4eTJqbjYyc2ZrMWlzNCJ9.dUkkQP4qicqwnN_JsClhkA';
+
+        let map;
+        let currentLocationCoords = null;
+        let destinationCoords = null;
+        let routeLayer;
+        let alertMarkers = [];
+        let userMarker;
+
+        // Initialize the map
+        function initializeMap() {
+            map = L.map('map').setView([40.712776, -74.005974], 12); // Default to NYC
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Geocoders for user input
+            const currentLocationInput = new MapboxGeocoder({
+                accessToken: mapboxgl.accessToken,
+                placeholder: 'Enter current location',
+                mapboxgl: mapboxgl,
+                marker: false
+            });
+
+            const destinationInput = new MapboxGeocoder({
+                accessToken: mapboxgl.accessToken,
+                placeholder: 'Enter destination',
+                mapboxgl: mapboxgl,
+                marker: false
+            });
+
+            // Append geocoder inputs to the controls
+            document.getElementById('currentLocationInputContainer').appendChild(currentLocationInput.onAdd(map));
+            document.getElementById('destinationInputContainer').appendChild(destinationInput.onAdd(map));
+
+            // Listen for result events to get coordinates
+            currentLocationInput.on('result', (e) => {
+                if (e.result && e.result.geometry) {
+                    currentLocationCoords = e.result.geometry.coordinates;
+                    addMarker(currentLocationCoords, 'Current Location');
+                } else {
+                    displayError("Invalid current location. Please try again.");
+                    currentLocationCoords = null;
+                }
+            });
+
+            destinationInput.on('result', (e) => {
+                if (e.result && e.result.geometry) {
+                    destinationCoords = e.result.geometry.coordinates;
+                    addMarker(destinationCoords, 'Destination');
+                } else {
+                    displayError("Invalid destination. Please try again.");
+                    destinationCoords = null;
+                }
+            });
+
+            // Load alerts dynamically (simulating from index.html)
+            loadDynamicAlerts();
+
+            // Track user live location
+            trackUserLocation();
+        }
+
+        // Function to track live user location
+        function trackUserLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(position => {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const accuracy = position.coords.accuracy;
+
+                    // Update user's location on the map
+                    if (userMarker) {
+                        userMarker.setLatLng([lat, lng]);
+                    } else {
+                        userMarker = L.marker([lat, lng]).addTo(map).bindPopup('You are here').openPopup();
+                    }
+
+                    // Center map on user's location
+                    map.setView([lat, lng], 14);
+
+                    // Set current location coordinates for navigation
+                    currentLocationCoords = [lng, lat];
+                }, () => {
+                    displayError("Unable to retrieve your location.");
+                });
+            } else {
+                displayError("Geolocation is not supported by your browser.");
+            }
+        }
+
+        // Function to add a marker to the map
+        function addMarker(coords, popupText) {
+            const marker = L.marker([coords[1], coords[0]]).addTo(map).bindPopup(popupText).openPopup();
+        }
+
+        // Function to load dynamic alerts from index.html
+        function loadDynamicAlerts() {
+            const alerts = [
+                { latlng: [40.7128, -74.0060], message: "Alert: Construction Zone" },
+                { latlng: [40.7138, -74.0050], message: "Alert: Broken Sidewalk" },
+                { latlng: [40.7148, -74.0040], message: "Alert: Low-hanging Branch" }
+            ];
+
+            alerts.forEach(alert => {
+                const marker = L.marker(alert.latlng).addTo(map).bindPopup(alert.message);
+                alertMarkers.push(marker);
+            });
+        }
+
+        // Function to display error messages
+        function displayError(message) {
+            document.getElementById('error-message').textContent = message;
+        }
+
+        // Function to start navigation
+        function startNavigation() {
+            if (!currentLocationCoords || !destinationCoords) {
+                displayError("Please set both current location and destination.");
+                return;
+            }
+
+            // Clear previous error
+            displayError("");
+
+            // Get the selected mode (driving or walking)
+            const mode = document.getElementById('mode').value;
+
+            // Construct the API request URL for Mapbox Directions API
+            const url = `https://api.mapbox.com/directions/v5/mapbox/${mode}/${currentLocationCoords.join(',')};${destinationCoords.join(',')}?geometries=geojson&access_token=${mapboxgl.accessToken}`;
+
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.routes && data.routes.length) {
+                        const route = data.routes[0].geometry;
+
+                        // Remove existing route if any
+                        if (routeLayer) {
+                            map.removeLayer(routeLayer);
+                        }
+
+                        // Add new route to the map
+                        routeLayer = L.geoJSON(route, {
+                            style: { color: 'blue', weight: 5 }
+                        }).addTo(map);
+
+                        // Fit the map to the route bounds
+                        map.fitBounds(routeLayer.getBounds());
+                    } else {
+                        displayError("No route found. Please check your locations.");
+                    }
+                })
+                .catch(error => console.error('Error fetching directions:', error));
+        }
+
+        // Navigation functions to switch screens
+        function goToIndex() {
+            window.location.href = "index.html";
+        }
+
+        function goToNavigation() {
+            window.location.href = "navigation.html";
+        }
+    </script>
+</body>
+</html>
+
